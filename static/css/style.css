@@ -13,7 +13,7 @@ body {
 	flex-direction: column;
 	align-items: flex-start;
 }
-#submittedRatings {
+.rated-list {
 	display: flex;
 	flex-direction: column;
 	align-items: flex-start;

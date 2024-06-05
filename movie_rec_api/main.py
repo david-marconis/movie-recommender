@@ -6,12 +6,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from jinja2 import Template
 from pydantic import BaseModel
 from pyspark import Row
 from pyspark.sql.functions import col
 
-from .recommender import MovieRecommender, Rating
+from movie_rec_api.recommender import MovieRecommender, Rating, Recommendation
 
 
 class SessionData(BaseModel):
@@ -38,6 +37,13 @@ def get_recommender():
 movies = [{"title": "Movie 1", "year": 1997, "id": 1}]
 
 
+def render_block(template_name: str, block_name: str, **kwargs):
+    template = templates.get_template(template_name)
+    context = template.new_context(vars=kwargs)
+    content = "".join(template.blocks[block_name](context))
+    return HTMLResponse(content=content)
+
+
 @app.get("/")
 async def root(
         request: Request,
@@ -48,10 +54,7 @@ async def root(
         .limit(20)\
         .rdd.map(lambda r: r.asDict())\
         .collect()
-    return templates.TemplateResponse("movies.html", {
-        "request": request,
-        "movies": movie_sample
-    })
+    return render_block("movies.html", "index", movies=movie_sample)
 
 
 @app.get("/loadMovies/")
@@ -70,23 +73,12 @@ async def load_movies(
         .rdd.map(lambda r: r.asDict())\
         .collect()
     session_data.movie_ids.extend([movie["id"] for movie in movie_sample])
-    rendered = Template("""\
-{% for movie in movies %}
-<div class="movie">
-    <span class="movie-title">{{ movie.title }} ({{ movie.year }})</span>\
-    {% for rating in range(1, 6) %}
-    <input type="radio" name="m_{{ movie.id }}" value="{{ rating }}">{{ rating }}
-    {% endfor %}
-</div>
-{% endfor %}\
-<button hx-post="/submitRatings/" hx-target="#submittedRatings">Submit ratings</button>
-""").render(movies=movie_sample)
-    response = HTMLResponse(content=rendered)
+    response = render_block("movies.html", "movies", movies=movie_sample)
     response.set_cookie("movieIds", str(session_id), samesite="strict")
     return response
 
 
-def get_or_create_session(session_id: str | None) -> (str, list[int]):
+def get_or_create_session(session_id: str | None) -> str:
     if session_id is None or session_id not in sessions:
         session_id = str(uuid4())
         session_data = SessionData(movie_ids=[], ratings={})
@@ -109,17 +101,10 @@ async def submit(request: Request):
     session_data.ratings.update(ratings)
     ratings_df = movie_recommender.spark.createDataFrame(
         [Row(id=k, rating=v) for k, v in session_data.ratings.items()])
-    print(session_data)
     ratings_with_metadata = movie_recommender.movie_metadata\
         .join(ratings_df, "id", "inner")\
         .collect()
-    print(ratings_with_metadata)
-    rendered = Template("""\
-{% for movie in movies %}
-<span class="movie-title">{{ movie.title }} ({{ movie.year }}): {{ movie.rating }}</span>
-{% endfor %}\
-""").render(movies=ratings_with_metadata)
-    response = HTMLResponse(content=rendered)
+    response = render_block("movies.html", "ratings", movies=ratings_with_metadata)
     response.headers.append("HX-Trigger", "ratingsSubmitted")
     return response
 
@@ -131,18 +116,15 @@ async def recommend(
     session_id = request.cookies.get("movieIds")
     if session_id is None or session_id not in sessions:
         raise HTTPException(status_code=400, detail="Invalid session")
-    ratings = sessions[session_id].ratings
+    session_ratings = sessions[session_id].ratings
+    ratings = [Rating(movieId=i, rating=r) for i, r in session_ratings.items()]
     if len(ratings) == 0:
         raise HTTPException(
             status_code=400, detail="User has no submitted ratings")
     recommendations = recommender.recommend(ratings, 20)
-    rendered = Template("""\
-<h2>Movie Recommendations</h2>
-{% for r in recommendations %}\
-<span class="movie-title">{{ r.title }} ({{ r.year }}): {{ r.prediction }}</span>
-{% endfor %}\
-""").render(recommendations=recommendations)
-    return HTMLResponse(content=rendered)
+    return render_block(
+        "movies.html", "recommendations", recommendations=recommendations
+    )
 
 
 if __name__ == "__main__":

@@ -33,30 +33,42 @@ class MovieRecommender():
             f"{dataset_dir}/movies_metadata.parquet").cache()
         self.ratings = self.spark.read\
             .parquet(f"{dataset_dir}/ratings.parquet")
-
-    def recommend(self, new_ratings: List[Rating], top_k: int):
-        als = ALS(
+        self.als = ALS(
             maxIter=5,
             regParam=0.01,
             userCol="userId",
             itemCol="movieId",
             ratingCol="rating")
-        ratings = [Row(userid=0, movieId=r.movieId, rating=r.rating)
+
+    def recommend(self, new_ratings: List[Rating], top_k: int) -> List[Recommendation]:
+        ratings = [Row(userId=0, movieId=r.movieId, rating=r.rating)
                    for r in new_ratings]
         ratings_df = self.spark.createDataFrame(ratings)
-        model = als.fit(self.ratings.union(ratings_df))
+        print("Ratings:")
+        ratings_df.show()
+        model = self.als.fit(self.ratings.union(ratings_df))
         movies_to_predict = self.movie_metadata\
             .select(["id", "title", "year"])\
             .withColumnRenamed("id", "movieId")\
-            .join(ratings_df, "movieId", "left_anti")\
+            .join(ratings_df, "movieId", "left")\
             .withColumn("userId", lit(0))\
             .orderBy("movieId")
+        print("To be predicted:")
+        movies_to_predict.show()
         recommendations = model.transform(movies_to_predict)
         top_recommendations = recommendations\
-            .sort(recommendations.prediction.desc())\
-            .take(top_k)
-        return [Recommendation(title=r.title, prediction=r.prediction)
-                for r in top_recommendations]
+            .sort(recommendations.prediction.desc())
+        print("Predictions:")
+        top_recommendations.show()
+        return [
+            {
+                "id": r.movieId,
+                "title": r.title,
+                "year": r.year,
+                "prediction": r.prediction,
+            }
+            for r in top_recommendations.take(top_k)
+        ]
 
     def stop(self):
         self.spark.stop()

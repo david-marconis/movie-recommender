@@ -1,3 +1,4 @@
+{% block index %}
 <!DOCTYPE html>
 <html lang="en">
 
@@ -14,16 +15,47 @@
 	<div id="ratings">
 		<form id="ratingsForm" hx-indixator="#spinner">
 			<h2>How would you rate these movies?</h2>
-			<div id="movies" hx-get="/loadMovies/" hx-swap="innerHTML" hx-trigger="load, ratingsSubmitted"></div>
-			<!-- <button type="submit">Submit Ratings -->
-			<!-- 	<img id="spinner" class="htmx-indicator" -->
-			<!-- 		src="https://raw.githubusercontent.com/n3r4zzurr0/svg-spinners/main/svg-css/ring-resize.svg" /> -->
-			<!-- </button> -->
+			<div id="movies" hx-get="/loadMovies/" hx-swap="innerHTML" hx-trigger="load, ratingsSubmitted">
+			</div>
 		</form>
 
-		<div id="submittedRatings"></div>
-		<div id="movieRecommendations"></div>
+		<div id="submittedRatings" class="rated-list"></div>
+		<div id="movieRecommendations" class="rated-list"></div>
 	</div>
 </body>
 
 </html>
+{% endblock %}
+
+
+{% block movies %}
+{% for movie in movies %}
+<div class="movie">
+	<span class="movie-title">{{ movie.title }} ({{ movie.year }})</span>
+	{% for rating in range(1, 6) %}
+	<input type="radio" name="m_{{ movie.id }}" value="{{ rating }}">{{ rating }}
+	{% endfor %}
+</div>
+{% endfor %}
+<button hx-post="/submitRatings/" hx-target="#submittedRatings">Submit ratings</button>
+{% endblock %}
+
+
+{% block ratings %}
+<h2>Submitted Ratings</h2>
+{% for movie in movies %}
+<span class="movie-title">{{ movie.title }} ({{ movie.year }}): {{ movie.rating }}</span>
+{% endfor %}
+<button hx-post="/recommend/" hx-target="#movieRecommendations">Submit Ratings
+	<img src="https://raw.githubusercontent.com/n3r4zzurr0/svg-spinners/main/svg-css/ring-resize.svg" id="spinner"
+		class="htmx-indicator" />
+</button>
+{% endblock %}
+
+
+{% block recommendations %}
+<h2>Movie Recommendations</h2>
+{% for r in recommendations %}
+<span class="movie-title">{{ r.title }} ({{ r.year }}): {{ r.prediction }}</span>
+{% endfor %}
+{% endblock %}
