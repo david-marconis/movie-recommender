@@ -13,60 +13,63 @@ class Rating(BaseModel):
 
 
 class Recommendation(BaseModel):
+    movieId: int
     title: str
+    year: int
     prediction: float
 
 
-class MovieRecommender():
+class MovieRecommender:
     def __init__(self, dataset_dir: str):
-        self.spark = SparkSession.builder\
-            .config(
+        self.spark = (
+            SparkSession.builder.config(
                 "spark.driver.extraJavaOptions",
-                "-Dlog4j.configuration=file:log4j.properties")\
+                "-Dlog4j.configuration=file:log4j.properties",
+            )
             .config(
                 "spark.executor.extraJavaOptions",
-                "-Dlog4j.configuration=file:log4j.properties")\
-            .config("spark.ui.showConsoleProgress", "false")\
+                "-Dlog4j.configuration=file:log4j.properties",
+            )
+            .config("spark.ui.showConsoleProgress", "false")
             .getOrCreate()
+        )
         self.spark.sparkContext.setLogLevel("ERROR")
         self.movie_metadata = self.spark.read.parquet(
-            f"{dataset_dir}/movies_metadata.parquet").cache()
-        self.ratings = self.spark.read\
-            .parquet(f"{dataset_dir}/ratings.parquet")
+            f"{dataset_dir}/movies_metadata.parquet"
+        ).cache()
+        self.ratings = self.spark.read.parquet(f"{dataset_dir}/ratings.parquet")
         self.als = ALS(
             maxIter=5,
             regParam=0.01,
             userCol="userId",
             itemCol="movieId",
-            ratingCol="rating")
+            ratingCol="rating",
+        )
 
     def recommend(self, new_ratings: List[Rating], top_k: int) -> List[Recommendation]:
-        ratings = [Row(userId=0, movieId=r.movieId, rating=r.rating)
-                   for r in new_ratings]
+        ratings = [
+            Row(userId=0, movieId=r.movieId, rating=r.rating) for r in new_ratings
+        ]
         ratings_df = self.spark.createDataFrame(ratings)
-        print("Ratings:")
-        ratings_df.show()
-        model = self.als.fit(self.ratings.union(ratings_df))
-        movies_to_predict = self.movie_metadata\
-            .select(["id", "title", "year"])\
-            .withColumnRenamed("id", "movieId")\
-            .join(ratings_df, "movieId", "left")\
-            .withColumn("userId", lit(0))\
-            .orderBy("movieId")
-        print("To be predicted:")
-        movies_to_predict.show()
+        union_ratings = self.ratings.union(ratings_df)
+        model = self.als.fit(union_ratings)
+        movies_to_predict = (
+            union_ratings.groupBy("movieId")
+            .count()
+            .filter("count > 100")
+            .select("movieId")
+            .withColumn("userId", lit(0))
+        )
         recommendations = model.transform(movies_to_predict)
-        top_recommendations = recommendations\
+        top_recommendations = (
+            recommendations.join(self.movie_metadata, "movieId", "left")
+            .select("movieId", "title", "year", "prediction")
             .sort(recommendations.prediction.desc())
-        print("Predictions:")
-        top_recommendations.show()
+        )
         return [
-            {
-                "id": r.movieId,
-                "title": r.title,
-                "year": r.year,
-                "prediction": r.prediction,
-            }
+            Recommendation(
+                movieId=r.movieId, title=r.title, year=r.year, prediction=r.prediction
+            )
             for r in top_recommendations.take(top_k)
         ]
 
@@ -77,8 +80,10 @@ class MovieRecommender():
 def get_user_ratings(movie_metadata: DataFrame):
     new_ratings = []
     to_rate = movie_metadata.sample(withReplacement=False, fraction=0.1)
-    print("Enter your rating of the following movies on a scale from 1-5. "
-          "Enter no rating to stop or rating 0 to skip the movie")
+    print(
+        "Enter your rating of the following movies on a scale from 1-5. "
+        "Enter no rating to stop or rating 0 to skip the movie"
+    )
     for row in to_rate.toLocalIterator():
         movie_id = row["id"]
         entered = input(f"How would you rate '{row.title} ({row.year})': ")
